@@ -1,9 +1,9 @@
 # Applied DL Project — Deepfake Audio Detection
 
 ## Group Members
-- Rohith [Last Name]
-- [Teammate 2]
-- [Teammate 3]
+- Rohith Bharathi
+- Gaurav Bhatnagar
+- Naveen Nagaraja Sudhakar
 
 ## Project Area
 Perception — Audio (.wav, .flac)
