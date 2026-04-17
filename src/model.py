@@ -113,9 +113,16 @@ class GraphAttentionLayer(nn.Module):
 class AASISTEncoder(nn.Module):
     """
     Simplified AASIST-style encoder.
-    Raw waveform -> SincConv -> ResBlocks -> Graph Attention -> global pool -> embedding
+    Raw waveform -> SincConv -> ResBlocks -> Graph Attention
+                 -> Temporal Attention Gate -> global pool -> embedding
+
+    The Temporal Attention Gate is applied BEFORE pooling, operating on the
+    32-node sequence produced by GAT.  This is meaningful: each node is a
+    temporal region, and attention suppresses codec-noise regions while
+    amplifying codec-robust regions (pitch, prosody).  Placing it after
+    pooling (on a single token) would make self-attention a trivial identity.
     """
-    def __init__(self, embed_dim=256, sinc_ch=70, sample_rate=16000):
+    def __init__(self, embed_dim=256, sinc_ch=70, sample_rate=16000, n_attn_heads=4):
         super().__init__()
         self.sinc    = SincConv(sinc_ch, kernel_size=1024 + 1, sample_rate=sample_rate)
         self.bn_sinc = nn.BatchNorm1d(sinc_ch)
@@ -139,6 +146,12 @@ class AASISTEncoder(nn.Module):
         self.gat1 = GraphAttentionLayer(128, 128)
         self.gat2 = GraphAttentionLayer(128, 128)
 
+        # ── NEW: Temporal Attention Gate on the 32-node sequence ──────────
+        # Operates on (B, 32, 128) — 32 temporal nodes, each 128-dim.
+        # Multi-head self-attention lets each node ask: "which other regions
+        # share codec-robust patterns with me?" and amplify those signals.
+        self.temporal_attn = TemporalAttention(128, n_heads=n_attn_heads)
+
         self.head = nn.Sequential(
             nn.Linear(128, embed_dim),
             nn.LayerNorm(embed_dim),
@@ -158,8 +171,12 @@ class AASISTEncoder(nn.Module):
         r    = self.pool(r)                # (B, 128, 32)
 
         r    = r.permute(0, 2, 1)         # (B, 32, 128) — nodes
-        r    = self.gat1(r)
-        r    = self.gat2(r)
+        r    = self.gat1(r)               # graph attention pass 1
+        r    = self.gat2(r)               # graph attention pass 2
+
+        # ── Temporal Attention Gate (new addition) ────────────────────────
+        r    = self.temporal_attn(r)      # (B, 32, 128) — codec-robust focus
+
         r    = r.mean(dim=1)              # (B, 128) — global mean pool over nodes
 
         return self.head(r)               # (B, embed_dim)
@@ -205,9 +222,10 @@ class CodecRobustDetector(nn.Module):
     """
     def __init__(self, embed_dim=256, n_codec_classes=10, sample_rate=16000, n_attn_heads=4):
         super().__init__()
-        self.encoder       = AASISTEncoder(embed_dim=embed_dim, sample_rate=sample_rate)
-        self.temporal_attn = TemporalAttention(embed_dim, n_attn_heads)
-        self.grl           = GradientReversalLayer(lam=1.0)
+        # TemporalAttention is now INSIDE AASISTEncoder (on 32 nodes before pool)
+        self.encoder = AASISTEncoder(embed_dim=embed_dim, sample_rate=sample_rate,
+                                     n_attn_heads=n_attn_heads)
+        self.grl     = GradientReversalLayer(lam=1.0)
 
         # Head 1: deepfake classifier
         self.deepfake_head = nn.Sequential(
@@ -225,7 +243,7 @@ class CodecRobustDetector(nn.Module):
 
     def forward(self, waveform):
         emb = self.encoder(waveform)               # (B, D)
-        emb = self.temporal_attn(emb.unsqueeze(1)).squeeze(1)
+        # Temporal attention is applied inside encoder on 32-node sequence
 
         return {
             'deepfake_logits': self.deepfake_head(emb),

@@ -35,16 +35,72 @@ def compute_auc(labels, scores):
 # ── Per-codec breakdown ───────────────────────────────────────────────────────
 
 @torch.no_grad()
-def per_codec_eval(model, asv_root, device, split="eval", batch_size=32, num_workers=4):
-    from data_utils import CODEC_CONFIG, ASVspoof2019Dataset
-    from torch.utils.data import DataLoader
+def per_codec_eval(model, asv_root, device, split="eval", batch_size=32, num_workers=4,
+                   preprocessed_root=None, max_samples=None):
+    from data_utils import CODEC_CONFIG, ASVspoof2019Dataset, ASVspoof2019Preprocessed, ALL_CODEC_TAGS, codec_tag, CODEC_TO_IDX
+    from torch.utils.data import DataLoader, Subset
+    import random
+
+    use_preprocessed = (preprocessed_root and Path(preprocessed_root).exists()
+                        and split in ("train", "dev"))
 
     rows = []
     for codec, bitrates in CODEC_CONFIG.items():
         for bitrate in bitrates:
-            ds = ASVspoof2019Dataset(asv_root, split=split, random_codec=False,
-                                     codec=codec, bitrate=bitrate, contrastive=False)
-            loader = DataLoader(ds, batch_size=batch_size, num_workers=num_workers)
+            tag = codec_tag(codec, bitrate)
+
+            if use_preprocessed:
+                if '_preloaded_ds' not in dir():
+                    pass  # will be set below
+                # Reuse the same dataset object and RAM cache across all codecs
+                if not hasattr(per_codec_eval, '_ram_ds'):
+                    print("  [RAM] Preloading all codec variants into RAM (one-time)...")
+                    _ds_shared = ASVspoof2019Preprocessed(
+                        asv_root=asv_root,
+                        processed_root=preprocessed_root,
+                        split=split,
+                        contrastive=False,
+                    )
+                    _indices = (random.sample(range(len(_ds_shared)), max_samples)
+                                if max_samples and len(_ds_shared) > max_samples
+                                else list(range(len(_ds_shared))))
+                    _ds_shared.preload_to_ram(_indices)
+                    per_codec_eval._ram_ds      = _ds_shared
+                    per_codec_eval._ram_indices = _indices
+                    print("  [RAM] Done — all subsequent codec evals run from RAM.")
+
+                ds_full = per_codec_eval._ram_ds
+                _indices = per_codec_eval._ram_indices
+                _tag = tag
+                _ds_ref = ds_full
+                def _fixed_getitem(idx, _t=_tag, _ds=_ds_ref):
+                    row   = _ds.records.iloc[idx]
+                    fname = row["filename"]
+                    label = 0 if row["label"] == "bonafide" else 1
+                    from data_utils import CODEC_CONFIG, CODEC_TO_IDX, codec_tag
+                    codec_str, br = next(
+                        (c, b) for c, brs in CODEC_CONFIG.items()
+                        for b in brs if codec_tag(c, b) == _t
+                    )
+                    wav = _ds._get(fname, _t)
+                    ci  = CODEC_TO_IDX.get((codec_str, br), 0)
+                    return {
+                        "waveform":  wav,
+                        "label":     torch.tensor(label, dtype=torch.long),
+                        "codec_idx": torch.tensor(ci,    dtype=torch.long),
+                    }
+                ds_full.__getitem__ = _fixed_getitem
+                ds = Subset(ds_full, _indices)
+            else:
+                ds_full = ASVspoof2019Dataset(asv_root, split=split, random_codec=False,
+                                              codec=codec, bitrate=bitrate, contrastive=False)
+                if max_samples and len(ds_full) > max_samples:
+                    indices = random.sample(range(len(ds_full)), max_samples)
+                    ds = Subset(ds_full, indices)
+                else:
+                    ds = ds_full
+
+            loader = DataLoader(ds, batch_size=batch_size, num_workers=0)
             sc, lb = [], []
             model.eval()
             for batch in loader:
@@ -57,8 +113,8 @@ def per_codec_eval(model, asv_root, device, split="eval", batch_size=32, num_wor
             auc = compute_auc(labels, scores)
             label_str = f"{codec}/{bitrate}kbps" if bitrate else codec
             rows.append({"codec": codec, "bitrate": bitrate or "—",
-                         "EER%": round(eer * 100, 2), "AUC": round(auc, 4), "n": len(ds)})
-            print(f"  {label_str:20s} | EER={eer*100:.2f}%  AUC={auc:.4f}")
+                         "EER%": round(eer * 100, 2), "AUC": round(auc, 4), "n": len(scores)})
+            print(f"  {label_str:20s} | EER={eer*100:.2f}%  AUC={auc:.4f}  n={len(scores)}")
     return pd.DataFrame(rows)
 
 
@@ -135,10 +191,12 @@ def get_args():
     p.add_argument("--checkpoint",    required=True)
     p.add_argument("--asv_root",      default=None)
     p.add_argument("--output_dir",    default="./results")
-    p.add_argument("--split",         default="eval")
-    p.add_argument("--batch_size",    type=int, default=32)
-    p.add_argument("--tsne",          action="store_true")
-    p.add_argument("--spectral",      default=None, help="Path to a .wav file")
+    p.add_argument("--split",              default="dev")
+    p.add_argument("--batch_size",         type=int, default=32)
+    p.add_argument("--tsne",               action="store_true")
+    p.add_argument("--spectral",           default=None, help="Path to a .wav file")
+    p.add_argument("--preprocessed_root",  default=None)
+    p.add_argument("--max_samples",        type=int, default=3000)
     return p.parse_args()
 
 
@@ -157,7 +215,9 @@ def main():
 
     if args.asv_root:
         df = per_codec_eval(model, args.asv_root, device,
-                             split=args.split, batch_size=args.batch_size)
+                             split=args.split, batch_size=args.batch_size,
+                             preprocessed_root=args.preprocessed_root,
+                             max_samples=args.max_samples)
         csv = out_dir / "per_codec_results.csv"
         df.to_csv(csv, index=False)
         print(df.to_string(index=False))

@@ -111,10 +111,14 @@ def evaluate(model, loader, device, split="dev"):
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--asv_root",        type=str,   default=None)
-    p.add_argument("--wavefake_root",   type=str,   default=None)
+    p.add_argument("--asv_root",           type=str,   default=None)
+    p.add_argument("--preprocessed_root",  type=str,   default=None,
+                   help="Path to data/processed folder (fast disk loading)")
+    p.add_argument("--wavefake_root",      type=str,   default=None)
     p.add_argument("--epochs",          type=int,   default=30)
-    p.add_argument("--batch_size",      type=int,   default=32)
+    p.add_argument("--max_len_sec",     type=float, default=2.0,
+                   help="Audio clip length in seconds (shorter = less VRAM)")
+    p.add_argument("--batch_size",      type=int,   default=16)
     p.add_argument("--lr",              type=float, default=3e-4)
     p.add_argument("--weight_decay",    type=float, default=1e-4)
     p.add_argument("--alpha",           type=float, default=0.5,
@@ -127,6 +131,10 @@ def get_args():
     p.add_argument("--num_workers",     type=int,   default=4)
     p.add_argument("--no_contrastive",  action="store_true")
     p.add_argument("--seed",            type=int,   default=42)
+    p.add_argument("--baseline",        action="store_true",
+                   help="Train plain AASIST. No GRL, no contrastive.")
+    p.add_argument("--max_samples",     type=int,   default=None,
+                   help="Limit training samples for fast iteration (e.g. 5000)")
     return p.parse_args()
 
 
@@ -135,6 +143,14 @@ def main():
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    if args.baseline:
+        print("Mode: BASELINE — plain AASIST, codec-augmented training, no GRL, no contrastive")
+        args.alpha          = 0.0   # GRL codec loss disabled
+        args.beta           = 0.0   # contrastive disabled
+        args.no_contrastive = True  # no contrastive loss
+        # preprocessed_root stays — same training data as full model
+    else:
+        print("Mode: FULL MODEL — codec augmentation + GRL + contrastive")
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +159,11 @@ def main():
     loaders = get_dataloaders(
         asv_root=args.asv_root, wavefake_root=args.wavefake_root,
         batch_size=args.batch_size, num_workers=args.num_workers,
-        random_codec=True, contrastive=not args.no_contrastive,
+        random_codec=True,
+        contrastive=not args.no_contrastive,
+        max_len_sec=args.max_len_sec,
+        preprocessed_root=args.preprocessed_root,
+        max_samples=args.max_samples,
     )
     assert "train" in loaders, "No training data."
 

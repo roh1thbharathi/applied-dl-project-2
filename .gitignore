@@ -1,9 +1,26 @@
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-models/*
-!models/.gitkeep
+# Raw audio data (huge — share via Google Drive)
+LA/
+
+# Preprocessed tensors (huge — share via Google Drive)
+D:/processed/
+
+# Model checkpoints (share via Google Drive)
+results/run_*/
+results/eval_*/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .env
+
+# Keep placeholder files
+!results/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!models/.gitkeep
+
+# Legacy
+data/raw/*
+data/processed/*
+models/*
