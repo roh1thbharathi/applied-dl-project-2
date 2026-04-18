@@ -74,18 +74,54 @@ def _get_effector(codec, bitrate):
 
 
 def apply_codec(waveform, sample_rate, codec, bitrate=None):
+    """Apply codec compression using system FFmpeg via subprocess."""
     if codec == "uncompressed":
         return waveform
     try:
-        effector = _get_effector(codec, bitrate)
-        if effector is None:
+        import subprocess, tempfile, os
+        br = int(bitrate) if bitrate else 128
+
+        # codec -> (ffmpeg format, extension, bitrate flag, extra args)
+        _FMT = {
+            "mp3":  ("mp3",  ".mp3", f"{br}k", ["-codec:a", "libmp3lame"]),
+            "aac":  ("adts", ".aac", f"{br}k", []),
+            "opus": ("opus", ".opus", f"{br}k", []),
+        }
+        if codec not in _FMT:
             return waveform
-        wav_cpu = waveform.squeeze(0).unsqueeze(-1).cpu()
-        out     = effector.apply(wav_cpu, sample_rate)
-        out     = out.squeeze(-1).unsqueeze(0)
-        T       = waveform.shape[-1]
-        return out[:, :T] if out.shape[-1] >= T else torch.nn.functional.pad(
-            out, (0, T - out.shape[-1]))
+        fmt, ext, br_str, extra = _FMT[codec]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path  = os.path.join(tmp, "in.wav")
+            out_path = os.path.join(tmp, f"out{ext}")
+            dec_path = os.path.join(tmp, "dec.wav")
+
+            # save input as wav
+            torchaudio.save(in_path, waveform.cpu(), sample_rate)
+
+            # encode
+            ret = subprocess.run(
+                ["ffmpeg", "-y", "-i", in_path,
+                 "-b:a", br_str] + extra + [out_path],
+                capture_output=True
+            )
+            if ret.returncode != 0:
+                return waveform
+
+            # decode back to wav
+            ret = subprocess.run(
+                ["ffmpeg", "-y", "-i", out_path, dec_path],
+                capture_output=True
+            )
+            if ret.returncode != 0:
+                return waveform
+
+            out, _ = torchaudio.load(dec_path)
+
+        T = waveform.shape[-1]
+        if out.shape[-1] >= T:
+            return out[:, :T]
+        return torch.nn.functional.pad(out, (0, T - out.shape[-1]))
     except Exception:
         return waveform
 

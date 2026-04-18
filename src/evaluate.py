@@ -44,15 +44,35 @@ def per_codec_eval(model, asv_root, device, split="eval", batch_size=32, num_wor
     use_preprocessed = (preprocessed_root and Path(preprocessed_root).exists()
                         and split in ("train", "dev"))
 
+    class FixedCodecSubset(torch.utils.data.Dataset):
+        """Wrapper that always returns a specific codec tag from a preprocessed dataset."""
+        def __init__(self, preprocessed_ds, indices, tag):
+            from data_utils import CODEC_CONFIG, CODEC_TO_IDX, codec_tag
+            self.ds      = preprocessed_ds
+            self.indices = indices
+            self.tag     = tag
+            self.ci      = CODEC_TO_IDX.get(
+                next((c, b) for c, brs in CODEC_CONFIG.items()
+                     for b in brs if codec_tag(c, b) == tag), 0)
+        def __len__(self):
+            return len(self.indices)
+        def __getitem__(self, idx):
+            row   = self.ds.records.iloc[self.indices[idx]]
+            fname = row["filename"]
+            label = 0 if row["label"] == "bonafide" else 1
+            wav   = self.ds._get(fname, self.tag)
+            return {
+                "waveform":  wav,
+                "label":     torch.tensor(label, dtype=torch.long),
+                "codec_idx": torch.tensor(self.ci, dtype=torch.long),
+            }
+
     rows = []
     for codec, bitrates in CODEC_CONFIG.items():
         for bitrate in bitrates:
             tag = codec_tag(codec, bitrate)
 
             if use_preprocessed:
-                if '_preloaded_ds' not in dir():
-                    pass  # will be set below
-                # Reuse the same dataset object and RAM cache across all codecs
                 if not hasattr(per_codec_eval, '_ram_ds'):
                     print("  [RAM] Preloading all codec variants into RAM (one-time)...")
                     _ds_shared = ASVspoof2019Preprocessed(
@@ -68,29 +88,7 @@ def per_codec_eval(model, asv_root, device, split="eval", batch_size=32, num_wor
                     per_codec_eval._ram_ds      = _ds_shared
                     per_codec_eval._ram_indices = _indices
                     print("  [RAM] Done — all subsequent codec evals run from RAM.")
-
-                ds_full = per_codec_eval._ram_ds
-                _indices = per_codec_eval._ram_indices
-                _tag = tag
-                _ds_ref = ds_full
-                def _fixed_getitem(idx, _t=_tag, _ds=_ds_ref):
-                    row   = _ds.records.iloc[idx]
-                    fname = row["filename"]
-                    label = 0 if row["label"] == "bonafide" else 1
-                    from data_utils import CODEC_CONFIG, CODEC_TO_IDX, codec_tag
-                    codec_str, br = next(
-                        (c, b) for c, brs in CODEC_CONFIG.items()
-                        for b in brs if codec_tag(c, b) == _t
-                    )
-                    wav = _ds._get(fname, _t)
-                    ci  = CODEC_TO_IDX.get((codec_str, br), 0)
-                    return {
-                        "waveform":  wav,
-                        "label":     torch.tensor(label, dtype=torch.long),
-                        "codec_idx": torch.tensor(ci,    dtype=torch.long),
-                    }
-                ds_full.__getitem__ = _fixed_getitem
-                ds = Subset(ds_full, _indices)
+                ds = FixedCodecSubset(per_codec_eval._ram_ds, per_codec_eval._ram_indices, tag)
             else:
                 ds_full = ASVspoof2019Dataset(asv_root, split=split, random_codec=False,
                                               codec=codec, bitrate=bitrate, contrastive=False)
