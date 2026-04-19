@@ -2,7 +2,8 @@
 
 **Group:** Rohith Bharathi · Gaurav Bhatnagar · Naveen Nagaraja Sudhakar  
 **Repo:** https://github.com/roh1thbharathi/applied-dl-project-2  
-**Data (Google Drive):** https://drive.google.com/drive/folders/1_uW1o5sLToiU5tT3mLZsEFrvSU-9auB4?usp=drive_link
+**Data (Google Drive):** https://drive.google.com/drive/folders/1_uW1o5sLToiU5tT3mLZsEFrvSU-9auB4?usp=drive_link  
+**Naveen's Drive (Colab results + processed data):** https://drive.google.com/drive/folders/1fYovlaOZztXBzqm3G--aApx0pnq-QglY?usp=sharing
 
 ---
 
