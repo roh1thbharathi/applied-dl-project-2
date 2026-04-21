@@ -7,6 +7,7 @@ D:/processed/
 # Model checkpoints (share via Google Drive)
 results/run_*/
 results/eval_*/
+!results/eval_*/per_codec_results.csv
 
 # Python
 __pycache__/

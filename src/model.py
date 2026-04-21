@@ -122,8 +122,9 @@ class AASISTEncoder(nn.Module):
     amplifying codec-robust regions (pitch, prosody).  Placing it after
     pooling (on a single token) would make self-attention a trivial identity.
     """
-    def __init__(self, embed_dim=256, sinc_ch=70, sample_rate=16000, n_attn_heads=4):
+    def __init__(self, embed_dim=256, sinc_ch=70, sample_rate=16000, n_attn_heads=4, use_temporal_attn=True):
         super().__init__()
+        self.use_temporal_attn = use_temporal_attn
         self.sinc    = SincConv(sinc_ch, kernel_size=1024 + 1, sample_rate=sample_rate)
         self.bn_sinc = nn.BatchNorm1d(sinc_ch)
 
@@ -175,7 +176,8 @@ class AASISTEncoder(nn.Module):
         r    = self.gat2(r)               # graph attention pass 2
 
         # ── Temporal Attention Gate (new addition) ────────────────────────
-        r    = self.temporal_attn(r)      # (B, 32, 128) — codec-robust focus
+        if self.use_temporal_attn:
+            r = self.temporal_attn(r)      # (B, 32, 128) — codec-robust focus
 
         r    = r.mean(dim=1)              # (B, 128) — global mean pool over nodes
 
@@ -220,11 +222,10 @@ class CodecRobustDetector(nn.Module):
       codec_logits    : (B, n_codec_classes)
       embedding       : (B, embed_dim)
     """
-    def __init__(self, embed_dim=256, n_codec_classes=10, sample_rate=16000, n_attn_heads=4):
+    def __init__(self, embed_dim=256, n_codec_classes=10, sample_rate=16000, n_attn_heads=4, use_temporal_attn=True):
         super().__init__()
-        # TemporalAttention is now INSIDE AASISTEncoder (on 32 nodes before pool)
         self.encoder = AASISTEncoder(embed_dim=embed_dim, sample_rate=sample_rate,
-                                     n_attn_heads=n_attn_heads)
+                                     n_attn_heads=n_attn_heads, use_temporal_attn=use_temporal_attn)
         self.grl     = GradientReversalLayer(lam=1.0)
 
         # Head 1: deepfake classifier
