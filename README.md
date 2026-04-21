@@ -195,8 +195,3 @@ applied-dl-project-2/
 - `num_workers=0` — required on Windows to avoid DataLoader deadlock
 
 ---
-
-## HW Submissions
-- **HW1 (due 3/23):** Group formed, repo created ✅
-- **HW2 (due 3/30):** Problem, datasets, goals submitted ✅
-- **Final:** In progress — eval running, write-up pending
