@@ -193,6 +193,7 @@ def get_args():
     p.add_argument("--batch_size",         type=int, default=32)
     p.add_argument("--tsne",               action="store_true")
     p.add_argument("--spectral",           default=None, help="Path to a .wav file")
+    p.add_argument("--no_temporal",       action="store_true", help="Load model with use_temporal_attn=False")
     p.add_argument("--preprocessed_root",  default=None)
     p.add_argument("--max_samples",        type=int, default=3000)
     return p.parse_args()
@@ -204,7 +205,8 @@ def main():
 
     from model import CodecRobustDetector
     from data_utils import N_CODEC_CLASSES
-    model = CodecRobustDetector(n_codec_classes=N_CODEC_CLASSES)
+    model = CodecRobustDetector(n_codec_classes=N_CODEC_CLASSES,
+                                  use_temporal_attn=not args.no_temporal)
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     model.to(device).eval()
 

@@ -73,6 +73,23 @@ def _get_effector(codec, bitrate):
     return _effector_cache[key]
 
 
+def _get_ffmpeg():
+    """Find ffmpeg executable, checking conda env first."""
+    import shutil, os, sys
+    # Check PATH first
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    # Try conda env bin
+    conda_bin = Path(sys.executable).parent
+    for candidate in [conda_bin / "ffmpeg.exe", conda_bin / "ffmpeg",
+                      conda_bin.parent / "bin" / "ffmpeg.exe",
+                      conda_bin.parent / "bin" / "ffmpeg"]:
+        if candidate.exists():
+            return str(candidate)
+    return "ffmpeg"  # fallback
+
+
 def apply_codec(waveform, sample_rate, codec, bitrate=None):
     """Apply codec compression using system FFmpeg via subprocess."""
     if codec == "uncompressed":
@@ -96,24 +113,28 @@ def apply_codec(waveform, sample_rate, codec, bitrate=None):
             out_path = os.path.join(tmp, f"out{ext}")
             dec_path = os.path.join(tmp, "dec.wav")
 
+            ffmpeg = _get_ffmpeg()
+
             # save input as wav
             torchaudio.save(in_path, waveform.cpu(), sample_rate)
 
             # encode
             ret = subprocess.run(
-                ["ffmpeg", "-y", "-i", in_path,
+                [ffmpeg, "-y", "-i", in_path,
                  "-b:a", br_str] + extra + [out_path],
                 capture_output=True
             )
             if ret.returncode != 0:
+                print(f"  [FFmpeg encode error] {ret.stderr.decode(errors='replace')[-200:]}")
                 return waveform
 
             # decode back to wav
             ret = subprocess.run(
-                ["ffmpeg", "-y", "-i", out_path, dec_path],
+                [ffmpeg, "-y", "-i", out_path, dec_path],
                 capture_output=True
             )
             if ret.returncode != 0:
+                print(f"  [FFmpeg decode error] {ret.stderr.decode(errors='replace')[-200:]}")
                 return waveform
 
             out, _ = torchaudio.load(dec_path)
@@ -122,7 +143,8 @@ def apply_codec(waveform, sample_rate, codec, bitrate=None):
         if out.shape[-1] >= T:
             return out[:, :T]
         return torch.nn.functional.pad(out, (0, T - out.shape[-1]))
-    except Exception:
+    except Exception as e:
+        print(f"  [apply_codec ERROR] {codec}_{bitrate}: {e}")
         return waveform
 
 
